@@ -38,13 +38,13 @@ def results():
     """
 
 
-def payment(suffix="paypal", code="14", sub=""):
+def payment(suffix="paypal", code="14", sub="", checked=False):
     # Like Renfe's method handler, the test page recalculates when its radio is clicked.
     total = "100 Puntos" if code == "11" else "42.50 €"
     return f"""
         <form method="post">
           <input type="radio" name="radiobutton" id="datosPago_cdgoFormaPago_{suffix}"
-                 value="{code}" subCdgoFormaPago="{sub}" onclick="choose(this)">
+                 value="{code}" subCdgoFormaPago="{sub}" onclick="choose(this)" {"checked" if checked else ""}>
           <input type="hidden" id="datosPago_cdgoFormaPago">
           <input type="hidden" id="datosPago_subCdgoFormaPago">
           <span id="totalTrayecto">45,00 €</span><button>Pagar</button>
@@ -75,16 +75,17 @@ def fixtures(tab, pages):
     return requests
 
 
-@pytest.mark.parametrize("method,suffix,code,sub", [
-    (checkout.Method.paypal, "paypal", "14", ""),
-    (checkout.Method.bizum, "bizum", "02", "05"),
-    (checkout.Method.card, "tarjetaRedSys", "02", "02"),
-    (checkout.Method.google_pay, "googlePay", "02", "06"),
-    (checkout.Method.renfe_points, "tarjetaRenfe", "11", ""),
+@pytest.mark.parametrize("method,suffix,code,sub,checked", [
+    (checkout.Method.paypal, "paypal", "14", "", False),
+    (checkout.Method.paypal, "paypal", "14", "", True),
+    (checkout.Method.bizum, "bizum", "02", "05", False),
+    (checkout.Method.card, "tarjetaRedSys", "02", "02", False),
+    (checkout.Method.google_pay, "googlePay", "02", "06", False),
+    (checkout.Method.renfe_points, "tarjetaRenfe", "11", "", False),
 ])
-def test_review_selects_only_requested_method(tab, method, suffix, code, sub):
+def test_review_selects_only_requested_method(tab, method, suffix, code, sub, checked):
     requests = fixtures(tab, {("GET", legacy.RESULTS_URL): results(),
-                              ("GET", checkout.PAYMENT): payment(suffix, code, sub)})
+                              ("GET", checkout.PAYMENT): payment(suffix, code, sub, checked)})
     tab.context.route("**/*", checkout._review_guard())
 
     def user_chooses_fare(_):

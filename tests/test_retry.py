@@ -294,6 +294,16 @@ def test_after_the_last_train_an_empty_day_isnt_a_failure(monkeypatch, arrival):
     assert out["fares_included"] is False  # nothing was priced
 
 
+def test_interactive_checkout_explains_when_the_last_train_has_left(monkeypatch):
+    frozen_at(monkeypatch, "2026-11-15T23:30")
+    use(monkeypatch, FakeRenfe(legacy_trains=[], **{
+        config.SEARCH_TRAVEL_PATH: lambda _: httpx.Response(200, json={"total_count": 0, "travel_options": []}),
+    }))
+    result = invoke("checkout", "Madrid", "Barcelona", "--interactive")
+    assert result.exit_code == 2 and not result.stdout
+    assert json.loads(result.stderr)["error"]["message"] == "No more trains today after 23:30; try --date tomorrow."
+
+
 def new_system_on(day: str, *departures: str) -> dict:
     """The new system's list for `day`: one train per Madrid departure time ("09:00"), in winter (UTC+1)."""
     from datetime import datetime as dt, timedelta

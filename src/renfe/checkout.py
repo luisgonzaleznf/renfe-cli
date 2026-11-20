@@ -92,11 +92,11 @@ def _select_method(page: "Page", method: Method) -> str:
     radio = page.locator(f"input[type=radio][name=radiobutton]#datosPago_cdgoFormaPago_{_RADIOS[method]}")
     if radio.count() != 1 or not radio.is_visible() or not radio.is_enabled():
         raise UsageError(f"Renfe doesn't offer {method.value} for this checkout.")
-    radio.check()
+    radio.click()
     # The click handler updates these fields and synchronously recalculates the total.
     applied = page.locator("#datosPago_cdgoFormaPago")
     subcode = page.locator("#datosPago_subCdgoFormaPago")
-    if (applied.input_value() != radio.input_value()
+    if (not radio.is_checked() or applied.input_value() != radio.input_value()
             or subcode.input_value() != (radio.get_attribute("subCdgoFormaPago") or "")
             or page.evaluate("window.errorPrecios") is not False):
         raise UpstreamError("Renfe did not confirm the payment method and total.")
