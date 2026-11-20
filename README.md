@@ -454,6 +454,11 @@ lines). Errors go to stderr as `{"error": {...}}`, with these exit codes:
 | `5` | blocked or upstream: 403/429, a bot page, timeout or 5xx, including Renfe's live map for `delays` and `status` (for `watch`, only a block or rate limit). If this happens while fetching fares, stdout still has the timetable (plus `fares_error`). On the legacy shop it falls back instead (exit 0, `notice`) |
 | `7` | API changed |
 
+## Built on renfe-cli
+
+- [renfe-tui](https://github.com/Sn4pe/renfe-tui): a terminal UI to search trains, see fares, buy, follow a
+  train and check delays, with the mouse or the keyboard. It runs `renfe` as a subprocess and reads its JSON.
+
 ## Contributing
 
 Issues and pull requests are welcome. To work on the code:
