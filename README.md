@@ -17,7 +17,9 @@ scripts and AI agents can use it as easily as people. No account, no API key, an
   for one adult, cheapest first. For trips before 25 Jan 2027 it asks Renfe's legacy shop as a guest, so
   no train is missing.
 - **Live delays** from Renfe's public train map: one train (`status`), a JSON line whenever it changes
-  (`watch`), or every delayed train on the network with its scheduled times (`delays`).
+  (`watch`), or every delayed train on the network with its scheduled times (`delays`). Today's `search`
+  gives each train's delay too and, for a train already running and due within 30 minutes, an estimated
+  departure from your station.
 - **The number on your ticket works.** A train can run under another number for part of its route;
   `search`, `status`, `watch` and `delays` find the live train either way.
 - **About 1,400 stations ship with the CLI**, matched by name (accents and case ignored) or code, with
@@ -82,7 +84,8 @@ train is left out here:
       ],
       "intermediate_stops": 1,
       "delay_minutes": null,
-      "live_train": null
+      "live_train": null,
+      "estimated_departure": null
     }
   ],
   "shop": {
@@ -109,7 +112,7 @@ renfe search Madrid Barcelona -d 2027-01-29 --after 08:00 --limit 2 \
 | Command | What it does |
 |---|---|
 | `renfe stations [QUERY]` | Stations and city groups matching a name or code, best match first |
-| `renfe search FROM TO` | Trains on a date, with times, changes and fares for one adult; for today, live delays too |
+| `renfe search FROM TO` | Trains on a date, with times, changes and fares for one adult; for today, live delays and estimated departures too |
 | `renfe open FROM TO` | Opens Renfe's shop for that search in your browser, or prints the link |
 | `renfe delays [TRAIN]` | Every delayed train on the live map, with its scheduled departure and arrival |
 | `renfe status TRAIN` | One train's live delay, its next station and the expected arrival there |
@@ -131,6 +134,10 @@ the exit codes in [Output and errors](#output-and-errors).
   each leg, and the train's is the first of those the map has. Beside it, `live_train` is the number on the
   live map that delay came from (`null` with no delay): the train's own, or a published partner's when the
   number you'd buy isn't on the map (see [Delays](#delays)).
+- `estimated_departure`: for a train already running and due at your station within the next 30 minutes,
+  its scheduled departure plus `delay_minutes`, else `null`. It's an estimate, not Renfe's; how far to trust
+  it is under [Delays](#delays). A train with a change also has one on each leg, and the train's is its first
+  leg's.
 
 It also returns `retries`, empty when nothing was retried: one entry per request that failed once and was
 tried again, with `request` (which one), `tries`, `errors` (what failed on each try, such as
@@ -347,6 +354,25 @@ reason. With no cached timetable on a slow connection, a search that stops waiti
 the next one waits again; `renfe delays` or `renfe status` fills it. On 18–20 Nov 2026, on the two routes the
 soak test searched (Madrid–Barcelona, Zaragoza–Madrid), a sold number was off the map while a published
 partner was on it once in 347 searches; routes with more partner numbers see it more often.
+
+**Estimated departure.** A train with a delay also gets `estimated_departure`: its scheduled departure from
+your station plus `delay_minutes`, with an early train counted as on time, since it waits for its departure.
+It's given only when that time is within 30 minutes after the map's time, and never in the past: by then the
+train has left, or its delay has grown. A train that is `overdue` at its next station (as `status` above
+explains) gets none, since its delay may be growing. Nor does a train still at its first station: it isn't
+running yet, and how late a train leaves its first station hasn't been measured. So the estimate is for
+stations along a train's route, not where it starts. Each leg of a change has its own. The train's is its first
+leg's, so a trip whose first train isn't running yet has `null` even when a later leg has one.
+
+How far to trust it, from Renfe's live map recorded every 2 minutes from Friday 20 Nov 2026 15:40 to Saturday
+21 Nov 23:30 (68,026 pairs of sightings of a running train, 30 minutes apart):
+- Over 30 minutes the delay changed by a median of 2 minutes. One time in ten it changed by 8 minutes or
+  more, and 29% of the time by 5 or more.
+- Delays grew more often than they shrank (in 52% of the pairs, against 30%), so a train leaves after its
+  estimate more often than before it.
+- Over 60 minutes the median change was 4 minutes, and one time in ten 14 or more. That's why the estimate
+  stops at 30 minutes.
+- The sample is a Friday afternoon and a Saturday, with no weekday morning yet.
 
 Today's list hides trains past their scheduled departure, even a late one that hasn't reached your station
 yet:
