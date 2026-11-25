@@ -294,8 +294,11 @@ def search(
     leaves = lambda t: datetime.fromisoformat(t["departure"])
     shop_would_list = now is not None and any(leaves(t) > now + LEGACY_LISTING_LEAD for t in trains)
     if from_now and minute is not None:
+        # Moments, not clock faces: the night the clocks go back, 02:20 CET comes after 02:40 CEST, and a station's
+        # local time (Renfe labels each one) needn't be Madrid's. `after` stays for the notice below.
         after = minute.time()
-    if after:
+        trains = [t for t in trains if leaves(t) >= minute]
+    elif after:
         trains = [t for t in trains if leaves(t).time() >= after]
     leaving_now = False
     if (legacy_empty and minute is not None and day == minute.date() and not shop_would_list

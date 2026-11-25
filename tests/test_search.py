@@ -2,7 +2,7 @@
 
 import json
 import threading
-from datetime import date, time
+from datetime import date, datetime, time, timedelta
 
 import httpx
 import pytest
@@ -94,6 +94,42 @@ def test_before_cutoff_the_legacy_shop_gives_every_train_and_its_fares():
 def test_after_and_limit():
     out = run(FakeRenfe(), fares=False, after=time(8, 0), limit=1)
     assert [t["service"] for t in out["trains"]] == ["03100"]
+
+
+def test_today_hides_only_trains_that_have_left_even_the_night_the_clocks_go_back():
+    """31 Oct 2027: 02:40 CEST is 00:40 UTC, and a train at 02:20 CET (01:20 UTC) leaves 40 minutes later."""
+    night = {"total_count": 2, "travel_options": [
+        {"travel_duration": 160, "travel_path": [path("03000", "2027-10-31T00:20:00Z", "2027-10-31T03:00:00Z")]},
+        {"travel_duration": 160, "travel_path": [path("03100", "2027-10-31T01:20:00Z", "2027-10-31T04:00:00Z")]}]}
+    now = datetime(2027, 10, 31, 2, 40, fold=0, tzinfo=search.MADRID)  # the first 02:40, summer time
+    assert now.utcoffset() == timedelta(hours=2)
+    out = run(FakeRenfe(**{"search-travel": lambda r: httpx.Response(200, json=night)}), day=date(2027, 10, 31),
+              fares=False, now=now, from_now=True)
+    assert [t["service"] for t in out["trains"]] == ["03100"]  # 03000 left at 02:20 CEST; 03100 is still to leave
+    assert out["trains"][0]["departure"] == "2027-10-31T02:20:00+01:00" and out["notice"] is None
+
+
+def test_today_compares_a_station_in_another_time_zone_by_the_moment():
+    """If Renfe labels a station Europe/Lisbon (a synthetic answer here, not seen from Renfe): 09:00 in Madrid is
+    08:00 in Porto, so a train leaving Porto at 08:30 local time is still to leave, though 08:30 reads earlier."""
+    leg = path("00421", "2027-01-29T08:30:00Z", "2027-01-29T10:30:00Z", origin="94346", destination="22308")
+    leg["departure_datetime_timezone"] = "Europe/Lisbon"
+    options = {"total_count": 1, "travel_options": [{"travel_duration": 120, "travel_path": [leg]}]}
+    now = datetime(2027, 1, 29, 9, 0, tzinfo=search.MADRID)
+    out = run(FakeRenfe(**{"search-travel": lambda r: httpx.Response(200, json=options)}), fares=False, now=now,
+              from_now=True)
+    assert [t["departure"] for t in out["trains"]] == ["2027-01-29T08:30:00+00:00"] and out["notice"] is None
+
+
+def test_today_hides_a_train_that_left_in_the_first_of_the_repeated_hours():
+    """31 Oct 2027: at 02:10 CET (01:10 UTC), a train at 02:30 CEST (00:30 UTC) left 40 minutes before."""
+    night = {"total_count": 1, "travel_options": [
+        {"travel_duration": 160, "travel_path": [path("03000", "2027-10-31T00:30:00Z", "2027-10-31T03:10:00Z")]}]}
+    now = datetime(2027, 10, 31, 2, 10, fold=1, tzinfo=search.MADRID)  # the second 02:10, winter time
+    assert now.utcoffset() == timedelta(hours=1)
+    out = run(FakeRenfe(**{"search-travel": lambda r: httpx.Response(200, json=night)}), day=date(2027, 10, 31),
+              fares=False, now=now, from_now=True)
+    assert out["trains"] == [] and out["notice"] == "No more trains today after 02:10; try --date tomorrow."
 
 
 
