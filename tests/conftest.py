@@ -33,6 +33,25 @@ def no_real_network(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def frozen_clock(request, monkeypatch):
+    """Pin the CLI's "now" to 2026-11-15 10:00 Madrid, so a test's fixed dates never fall in the past or hit the
+    today filter as the real calendar moves on. Tests that need another moment pin it again (`frozen_at`). The live
+    tests keep the real clock."""
+    if request.node.get_closest_marker("live"):
+        return
+    from datetime import datetime as real_datetime
+
+    from renfe import cli, search as search_mod
+
+    class Frozen(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return real_datetime(2026, 11, 15, 10, 0, tzinfo=search_mod.MADRID)
+
+    monkeypatch.setattr(cli, "datetime", Frozen)
+
+
+@pytest.fixture(autouse=True)
 def isolated_cache(tmp_path_factory, monkeypatch):
     """Every test gets its own cache dir: no test reads or writes the real session, stations or pace
     files (the live test included)."""

@@ -14,21 +14,6 @@ from fakes import STATIONS, FakeRenfe
 runner = CliRunner()
 
 
-@pytest.fixture(autouse=True)
-def frozen_clock(monkeypatch):
-    """Pin "now" to 2026-11-15 10:00 Madrid, so date-pinned tests never hit the today filter."""
-    from datetime import datetime as real_datetime
-
-    from renfe import search as search_mod
-
-    class Frozen(real_datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return real_datetime(2026, 11, 15, 10, 0, tzinfo=search_mod.MADRID)
-
-    monkeypatch.setattr(cli, "datetime", Frozen)
-
-
 @pytest.fixture
 def fake(monkeypatch, tmp_path):
     monkeypatch.setenv(config.CACHE_ENV, str(tmp_path))
