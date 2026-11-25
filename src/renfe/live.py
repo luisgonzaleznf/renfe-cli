@@ -54,6 +54,11 @@ _OVERDUE_AT_STATION = timedelta(minutes=10)
 # then 62, 121, 454 and 538 min (71891, 71876, 08109, 18054: 08109 listed at its origin 7.5 h after it left, delay
 # 0). 45 min sits in that gap with 20 min either side.
 _STALE = timedelta(minutes=45)
+# `search` estimates a leg's departure only this far ahead of the map's time. Renfe's map, recorded every 2 minutes from
+# Fri 20 Nov 2026 15:40 to Sat 21 Nov 23:30: over 30 minutes a running train's delay changed by a median of 2 minutes,
+# by 8 or more one time in ten, and by 5 or more in 29% of 68,026 pairs; over 60 minutes by a median of 4 (one time in
+# ten, 14 or more), too much to call an estimate. It grew more often than it shrank (52% and 30% of the pairs).
+ESTIMATE_AHEAD = timedelta(minutes=30)
 
 
 @dataclass(frozen=True)
@@ -144,9 +149,8 @@ def status(board: Board, number: str, names: dict[str, str], retries: list[dict]
         nxt["expected_arrival"] = _iso(entry["expected"])
     out.update(delay_minutes=entry["delay"], origin=station(entry["origin"]), destination=station(entry["destination"]),
                previous_station=station(entry["previous"]), next_station=nxt, reported_at=_iso(entry["reported_at"]))
-    at_station, late = entry["previous"] == entry["next"], _late(entry, board)
-    grace = _OVERDUE_AT_STATION if at_station else _OVERDUE_MOVING
-    out["overdue"] = bool(nxt and late is not None and late > grace and (entry["delay"] or 0) >= 0)
+    at_station = entry["previous"] == entry["next"]
+    out["overdue"] = _overdue(entry, board)
     where = nxt and (nxt["name"] or nxt["code"])
     since = f", since about {entry['expected']:%H:%M}" if entry["expected"] else ""
     if nxt and at_station:  # Renfe gives that station as both previous and next
@@ -162,6 +166,14 @@ def _late(entry: dict, board: Board) -> timedelta | None:
     """How far the expected arrival at the next station is behind the map's time (negative: still ahead)."""
     now = board.updated or entry["reported_at"]
     return now - entry["expected"] if now and entry["expected"] else None
+
+
+def _overdue(entry: dict, board: Board) -> bool:
+    """The expected arrival at the next station is further behind the map's time than a stop (or a moment, between
+    stations) allows: the train is probably held, and its delay is the last one recorded."""
+    late = _late(entry, board)
+    grace = _OVERDUE_AT_STATION if entry["previous"] == entry["next"] else _OVERDUE_MOVING
+    return bool(entry["next"] and late is not None and late > grace and (entry["delay"] or 0) >= 0)
 
 
 def in_background(transport: httpx.BaseTransport | None) -> Callable[[], tuple[Board | None, str | None, list[dict]]]:
@@ -221,6 +233,25 @@ def leg_delay(part: dict, board: Board | None, number: str | None = None) -> int
         return None
     start, end = datetime.fromisoformat(part["departure"]), datetime.fromisoformat(part["arrival"])
     return entry["delay"] if start - _SAME_RUN <= seen <= end + _SAME_RUN else None
+
+
+def estimated_departure(part: dict, board: Board | None) -> str | None:
+    """For `search`: a running train's scheduled departure from the leg's station plus the delay the leg got
+    (`delay_minutes`, from the map entry `live_train` names), counting an early train as on time, since it waits for
+    its departure. None unless that time falls within ESTIMATE_AHEAD after the map's time: never in the past (the
+    train has left, or its delay has grown since), never for a train overdue at its next station (its delay is the
+    last one recorded and may be growing), and never for one still at its first station: it isn't running yet, and
+    how late a train leaves its first station hasn't been measured (269 of 686 numbers on the map on Sat 21 Nov
+    first showed up there, one of them for 192 minutes)."""
+    delay, number = part.get("delay_minutes"), part.get("live_train")
+    entry = board.trains.get(key(number)) if board is not None and number else None
+    if entry is None or delay is None or _overdue(entry, board):
+        return None
+    if entry["previous"] == entry["next"] == entry["origin"]:  # still at its first station
+        return None
+    now = board.updated or entry["reported_at"]
+    moment = datetime.fromisoformat(part["departure"]) + timedelta(minutes=max(delay, 0))
+    return moment.isoformat() if now is not None and now <= moment <= now + ESTIMATE_AHEAD else None
 
 
 def _code(value: Any) -> str | None:

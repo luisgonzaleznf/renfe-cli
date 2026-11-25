@@ -183,6 +183,17 @@ def _live_trains(trains: list[dict]) -> None:
             train["live_train"] = first["live_train"] if first else None
 
 
+def _estimates(trains: list[dict], board: live.Board | None) -> None:
+    """`estimated_departure` beside each `delay_minutes` (live.estimated_departure). A train with a change takes its
+    first leg's: when the journey starts, so `null` while that train isn't running, whatever a later leg has."""
+    for train in trains:
+        parts = train.get("legs") or [train]
+        for part in parts:
+            part["estimated_departure"] = live.estimated_departure(part, board)
+        if "legs" in train:
+            train["estimated_departure"] = parts[0]["estimated_departure"]
+
+
 def _add_notice(out: dict, text: str) -> None:
     out["notice"] = f"{out['notice']} {text}" if out["notice"] else text
 
@@ -200,7 +211,8 @@ def search_cmd(
     limit: Annotated[int, typer.Option(min=1, max=200, help="Most trains to return, earliest first.")] = 10,
 ) -> None:
     """Trains from ORIGIN to DESTINATION on a date, with fares for one adult (before 25 Jan 2027, from Renfe's
-    legacy shop). For today, also each train's live delay, from Renfe's live train map."""
+    legacy shop). For today, also each train's live delay, from Renfe's live train map, and for a train already
+    running and due within 30 minutes, an estimated departure."""
 
     def produce() -> dict:
         day, after_time = _parse_date(date_), _parse_time(after, "--after")
@@ -226,6 +238,10 @@ def search_cmd(
             except Exception as exc:  # nor does a ticket-number check: those legs keep no delay
                 unchecked = f"unexpected error ({type(exc).__name__})"
         _live_trains(out["trains"])
+        try:
+            _estimates(out["trains"], board)
+        except Exception:  # nor does an estimate: a bug here leaves every train without one, and keeps the delays
+            _estimates(out["trains"], None)
         out["delays_included"] = board is not None
         if why:
             _add_notice(out, f"Delays are unknown ({why}).")

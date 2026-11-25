@@ -183,7 +183,14 @@ def leg_delays(out: dict, service: str) -> list:
 
 
 def no_delays(out: dict) -> bool:
-    return all(part["delay_minutes"] is None for t in out["trains"] for part in [t] + t.get("legs", []))
+    return all(part["delay_minutes"] is None and part["estimated_departure"] is None
+               for t in out["trains"] for part in [t] + t.get("legs", []))
+
+
+def estimates(out: dict) -> dict:
+    """Service -> the train's `estimated_departure` and its legs'."""
+    return {t["service"]: (t["estimated_departure"], [leg["estimated_departure"] for leg in t.get("legs", [])])
+            for t in out["trains"]}
 
 
 def test_today_each_train_gets_its_delay_and_each_leg_of_a_change_its_own(fake, monkeypatch):
@@ -258,6 +265,74 @@ def test_a_bug_attaching_delays_leaves_the_search_without_them(fake, monkeypatch
     assert "Delays are unknown (live map: unexpected error (KeyError))" in out["notice"]
 
 
+
+# --- estimated departure in today's search ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("previous,origin,estimate", [
+    ("70600", "60000", "2027-01-29T09:35:00+01:00"),  # running, from Madrid, toward Zaragoza
+    ("04040", "04040", None),                          # standing at Zaragoza, its first station: not running yet
+])
+def test_a_train_running_toward_your_station_gets_an_estimate_and_a_change_its_first_legs(monkeypatch, previous,
+                                                                                         origin, estimate):
+    """At 09:30: 00500, due out of Zaragoza at 09:30 and 5 minutes late, gets 09:35 if it is on its way there. The
+    journey starts with 00600, which isn't on the map, so the train gets none. 03100 left Madrid at about 09:12: past,
+    so none, though it keeps its delay."""
+    frozen_at(monkeypatch, "2027-01-29T09:30")
+    second = map_train("00500", 5, previous, "04040", "2027-01-29T09:33:00", origin=origin)
+    use(monkeypatch, FakeRenfe(live=live_map(map_train("03100", 12, "60000", "04040", "2027-01-29T10:32:00"), second)))
+    out = json.loads(invoke("search", "Madrid", "Barcelona", "--after", "06:00").stdout)
+    assert estimates(out) == {"03000": (None, []), "00600+00500": (None, [None, estimate]), "03100": (None, []),
+                              "03200": (None, [])}
+    assert delays(out)["03100"] == 12 and delays(out)["00600+00500"] == 5
+
+
+@pytest.mark.parametrize("delay,estimate", [
+    (10, "2026-11-15T17:10:00+01:00"),  # 30 minutes after the map's time: given
+    (11, None),                          # 31: too far ahead to call an estimate
+    (-4, "2026-11-15T17:00:00+01:00"),  # early: it waits for its departure
+])
+def test_an_estimate_is_given_up_to_30_minutes_ahead_and_never_before_the_timetable(monkeypatch, delay, estimate):
+    """Before the cut-off, from the legacy shop: 03300 leaves Atocha at 17:00, and the map, at 16:40, has it on its way
+    there from Chamartin."""
+    frozen_at(monkeypatch, "2026-11-15T16:40")
+    running = map_train("03300", delay, "17000", "60000", "2026-11-15T16:50:00", reported="2026-11-15T16:40:00",
+                        origin="17000")
+    handler = use(monkeypatch, FakeRenfe(live=live_map(running, updated="2026-11-15T16:40:00")))
+    out = json.loads(invoke("search", "Madrid", "Barcelona", "--no-fares").stdout)
+    assert delays(out)["03300"] == delay and estimates(out)["03300"] == (estimate, [])
+    assert handler.legacy_requests() and not handler.new_system_requests()
+
+
+@pytest.mark.parametrize("expected,estimate", [
+    ("2027-01-29T09:26:00", "2027-01-29T10:00:00+01:00"),  # 4 minutes behind its expected arrival at the next station
+    ("2027-01-29T09:24:00", None),                         # 6: overdue, its delay may be growing
+])
+def test_a_train_overdue_at_its_next_station_gets_no_estimate(expected, estimate):
+    board = live.parse(live_map(map_train("05100", 20, "60000", "04040", expected, reported="2027-01-29T09:30:00")))
+    leg = {"service": "05100", "departure": "2027-01-29T09:40:00+01:00", "arrival": "2027-01-29T12:00:00+01:00"}
+    live.annotate([leg], board)
+    leg["live_train"] = "05100"
+    assert leg["delay_minutes"] == 20 and live.estimated_departure(leg, board) == estimate
+
+
+def test_a_bug_estimating_keeps_the_delays_and_leaves_every_train_without_an_estimate(fake, monkeypatch):
+    frozen_at(monkeypatch, "2027-01-29T09:30")
+
+    def broken(part, board):
+        if board is not None:
+            raise KeyError("departure")
+        return None
+
+    monkeypatch.setattr(live, "estimated_departure", broken)
+    result = invoke("search", "Madrid", "Barcelona", "--after", "06:00")
+    assert result.exit_code == 0, result.output
+    out = json.loads(result.stdout)
+    assert delays(out)["03100"] == 12 and out["delays_included"] is True and out["notice"] is None
+    assert all(e == (None, [None] * len(legs)) for e, legs in
+               ((estimates(out)[t["service"]], t.get("legs", [])) for t in out["trains"]))
+
+
 # --- ticket numbers in today's search ----------------------------------------------------------------------------
 
 
@@ -293,6 +368,13 @@ def test_a_ticket_number_gets_its_live_trains_delay_as_status_finds_it(monkeypat
     assert out["notice"] is None and out["delays_included"] is True and timetable_requests(fake) == 1
     status = json.loads(invoke("status", "37432").stdout)  # the same live train, the same delay
     assert (status["train"], status["delay_minutes"], status["requested_train"]) == ("00632", 12, "37432")
+
+
+def test_a_ticket_numbers_estimate_is_its_own_departure_plus_the_live_trains_delay(monkeypatch):
+    ticket_search(monkeypatch, departure="09:40:00Z")  # 10:40 from Valladolid, 10 minutes after the map's time
+    (train,) = json.loads(invoke("search", "10600", "30100", "--after", "06:00", "--no-fares").stdout)["trains"]
+    assert (train["live_train"], train["delay_minutes"], train["estimated_departure"]) == (
+        "00632", 12, "2027-01-29T10:52:00+01:00")
 
 
 @pytest.mark.parametrize("departure,arrival", [
